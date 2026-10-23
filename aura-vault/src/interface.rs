@@ -95,6 +95,12 @@ pub trait AuraVaultTrait {
     /// ```
     fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
 
+    /// Swap a non-underlying input token through the configured router, validate it against fresh spot/TWAP oracle prices, then mint shares.
+    fn deposit_with_swap(env: Env, caller: Address, token_in: Address, amount_in: i128, min_shares: i128) -> Result<i128, VaultError>;
+
+    /// Batch deposit up to 20 individual amounts with one token transfer.
+    fn batch_deposit(env: Env, caller: Address, amounts: Vec<i128>) -> Result<Vec<i128>, VaultError>;
+
     /// Burn vault shares and redeem the proportional underlying tokens.
     ///
     /// Calculates the redemption amount using:
@@ -136,6 +142,9 @@ pub trait AuraVaultTrait {
     /// ```
     fn withdraw(env: Env, caller: Address, shares: i128) -> Result<i128, VaultError>;
 
+    /// Batch redeem up to 20 share amounts with one token transfer.
+    fn batch_withdraw(env: Env, caller: Address, shares: Vec<i128>) -> Result<Vec<i128>, VaultError>;
+
     /// Inject yield tokens into the vault without minting new shares.
     ///
     /// Any caller (keeper) may call this to increase `total_deposited`, which
@@ -158,6 +167,9 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
     /// - [`VaultError::MathOverflow`] — arithmetic overflow.
     fn harvest(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;
+
+    /// Ask the active strategy to realize and transfer its yield, then account for the harvest.
+    fn harvest_strategy(env: Env, caller: Address) -> Result<i128, VaultError>;
 
     /// Distribute underlying-token yield proportionally to all shareholders via
     /// the cumulative yield-per-share accumulator.
@@ -674,6 +686,9 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::UpgradeUnauthorized`] — caller is not the admin.
     fn set_oracle_max_age(env: Env, admin: Address, max_age_secs: u64) -> Result<(), VaultError>;
 
+    /// Configure the trusted router and oracle protection thresholds.
+    fn set_swap_config(env: Env, admin: Address, router: Address, max_slippage_bps: u32, twap_window_secs: u64, max_deviation_bps: u32) -> Result<(), VaultError>;
+
     /// Returns the configured oracle contract address, or `None` if not set.
     ///
     /// Read-only; no authorization required.
@@ -721,5 +736,20 @@ pub trait AuraVaultTrait {
     ///
     /// Read-only; no authorization required.
     fn list_price_snapshots(env: Env, timestamps: Vec<u64>, from: u64, to: u64) -> Vec<(u64, i128)>;
+
+    /// Permissionlessly register a keeper; the keeper must authorize its own registration.
+    fn register_keeper(env: Env, keeper_address: Address) -> Result<crate::KeeperRecord, VaultError>;
+
+    /// Read keeper performance statistics, or `None` for an unknown keeper.
+    fn get_keeper_stats(env: Env, keeper_address: Address) -> Option<crate::KeeperRecord>;
+
+    /// Return up to 20 keepers ordered by total yield harvested.
+    fn get_top_keepers(env: Env, limit: u32) -> Vec<crate::KeeperRecord>;
+
+    /// Create a multi-signer proposal for the active strategy address.
+    fn propose_strategy_update(env: Env, proposer: Address, strategy_address: Address) -> Result<u64, VaultError>;
+
+    /// Return the active strategy address, or `None` when assets are held idle.
+    fn get_active_strategy(env: Env) -> Option<Address>;
 }
 

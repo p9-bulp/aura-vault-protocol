@@ -19,8 +19,10 @@ use crate::errors::VaultError;
 use crate::storage::{
     get_multisig_op_count, get_multisig_signers, get_multisig_threshold, has_multisig_signed,
     record_multisig_vote, set_multisig_op_count, set_multisig_signers, set_multisig_threshold,
-    MULTISIG_EXPIRY_SECS,
+    get_strategy_timelock, set_strategy_timelock, MULTISIG_EXPIRY_SECS,
 };
+
+pub const STRATEGY_TIMELOCK_SECS: u64 = 86_400;
 
 // ---------------------------------------------------------------------------
 // Operation type — Soroban contracttype requires simple (tuple) variants
@@ -52,6 +54,8 @@ pub enum OpType {
     UpdateAdmin,
     UpdateUnderlyingToken,
     UpdateParameter(Symbol, i128),
+    /// Change the active yield strategy contract after governance approval.
+    SetStrategy(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +169,9 @@ pub fn propose_operation(
 
     set_op(env, new_id, &op);
     set_multisig_op_count(env, new_id);
+    if matches!(&op.op_type, OpType::SetStrategy(_)) && matches!(op.status, OpStatus::Ready) {
+        set_strategy_timelock(env, new_id, now.saturating_add(STRATEGY_TIMELOCK_SECS));
+    }
 
     // Record the proposer's vote to prevent double-signing
     record_multisig_vote(env, new_id, &proposer);
@@ -220,6 +227,9 @@ pub fn sign_operation(
     let threshold = get_multisig_threshold(env);
     if op.sig_count >= threshold {
         op.status = OpStatus::Ready;
+        if op.sig_count == threshold && matches!(&op.op_type, OpType::SetStrategy(_)) {
+            set_strategy_timelock(env, op_id, now.saturating_add(STRATEGY_TIMELOCK_SECS));
+        }
     }
 
     let sig_count = op.sig_count;
@@ -261,6 +271,11 @@ pub fn execute_multisig_op(
     let now = env.ledger().timestamp();
     if now > op.expires_at {
         return Err(VaultError::OperationExpired);
+    }
+    if matches!(&op.op_type, OpType::SetStrategy(_))
+        && now < get_strategy_timelock(env, op_id)
+    {
+        return Err(VaultError::TimelockNotExpired);
     }
 
     match op.status {
